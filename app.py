@@ -43,8 +43,34 @@ def parse_students_robust(text):
 def draw_single_eval_page(can, data):
     """วาดหน้าใบประเมิน 1 หน้า"""
     width, height = A4
+    
+    # --- เช็คว่าเป็นวิชา Math หรือไม่ ---
+    is_math = data.get('is_math', False)
+    title_suffix = "Math" if is_math else "English"
+    spelling_header = "99 Club" if is_math else "Spelling"
+    
+    # วาดหัวข้อหลัก
     can.setFont("Helvetica-Bold", 16)
-    can.drawString(50, height - 50, "Student Evaluation Form - English")
+    can.drawString(50, height - 50, f"Student Evaluation Form - {title_suffix}")
+    
+    # --- กล่องเกณฑ์คะแนนมุมขวาบน (Legend Box) ---
+    can.setFont("Helvetica", 8)
+    box_x, box_y, box_w, box_h = 440, height - 100, 110, 65
+    can.rect(box_x, box_y, box_w, box_h)
+    
+    legend_items = [
+        "1 - Unsatisfactory",
+        "2 - Could do better",
+        "3 - Satisfactory",
+        "4 - Gold",
+        "5 - Outstanding"
+    ]
+    
+    text_y = box_y + box_h - 12
+    for item in legend_items:
+        can.drawString(box_x + 5, text_y, item)
+        text_y -= 11
+
     can.setFont("Helvetica", 11)
     can.drawString(50, height - 80, f"Date:  {data.get('Date', '')}")
     can.drawString(50, height - 100, f"WALT:  {data.get('WALT', '')}")
@@ -54,10 +80,6 @@ def draw_single_eval_page(can, data):
 
     table_top, row_h = height - 200, 25
     cols = [200, 80, 80, 130]
-    
-    # --- เช็คว่าเป็นวิชา Math หรือไม่ ---
-    is_math = data.get('is_math', False)
-    spelling_header = "99 Club" if is_math else "Spelling"
     headers = ["Name", "Effort", spelling_header, "Teacher Assessment"]
     
     x = 50
@@ -81,11 +103,18 @@ def draw_single_eval_page(can, data):
             elif i == 3: can.drawCentredString(x + w/2, y_current + 7, "R    Y    G")
             x += w
     
+    # --- ส่วนท้าย (Footer) ปรับตามวิชา ---
     footer_y = y_current - 40
-    for item in ["Phonics:", "Grammar:", "Speaking and Listening:", "RWI/Fresh Start Book:", "Main Learning:"]:
+    if is_math:
+        footer_items = ["Arithmetic:", "Reasoning:", "True/False:", "Small Steps:"]
+    else:
+        footer_items = ["Phonics:", "Grammar:", "Speaking and Listening:", "RWI/Fresh Start Book:", "Main Learning:"]
+    
+    for item in footer_items:
         can.drawString(50, footer_y, item)
         can.line(50, footer_y - 2, 540, footer_y - 2)
         footer_y -= 30
+        
     can.showPage()
 
 def create_combined_evals_pdf(all_blocks):
@@ -138,8 +167,8 @@ def process_everything(file_bytes):
             fb["Students"] = parse_students_robust(block_text)
             
             # --- เช็ควิชา Math ---
-            if "math" in block_text.lower():
-                fb["is_math"] = True
+            is_math_block = "math" in block_text.lower()
+            fb["is_math"] = is_math_block
 
             for student in fb["Students"]:
                 # ไฮไลท์นักเรียน
@@ -164,7 +193,6 @@ def process_everything(file_bytes):
                         fb["WALT"] = walt_text
                         if "math" in walt_text.lower():
                             fb["is_math"] = True
-                    
                     for inst in page.search_for(room):
                         annot = page.add_highlight_annot(inst)
                         if annot: 
@@ -182,7 +210,7 @@ def process_everything(file_bytes):
 
 def main():
     st.title("🚀 BLC Mega Agenda Tool")
-    st.write("รองรับการเปลี่ยน Spelling เป็น 99 Club สำหรับวิชา Math อัตโนมัติ")
+    st.write("อัปเดต: เพิ่มกล่องเกณฑ์คะแนน (Legend) ไว้ที่มุมขวาบน")
 
     uploaded_files = st.file_uploader("Upload Agenda PDF", type="pdf", accept_multiple_files=True)
 
