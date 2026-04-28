@@ -3,60 +3,19 @@ import fitz  # PyMuPDF
 import re
 import io
 import zipfile
+import pandas as pd
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 
-# ================= Config หน้าตาโปรแกรม =================
-st.set_page_config(
-    page_title="BLC Agenda Checker v7.2",
-    page_icon="📋",
-    layout="centered"
-)
+# ================= Config สี (ปรับให้สว่างพิเศษเพื่อการปริ้นขาวดำ) =================
+HIGHLIGHT_STUDENT = (1.0, 1.0, 0.85)  # เหลืองจางมาก
+HIGHLIGHT_TIME = (0.93, 1.0, 0.93)     # เขียวจางมาก
+HIGHLIGHT_ROOM = (0.93, 0.96, 1.0)     # ฟ้าจางมาก
+STRIKE_COLOR = (1.0, 0.7, 0.7)        # แดงอ่อน (สำหรับขีดฆ่าคนขาด)
 
-# Custom CSS เพื่อความสวยงาม (Premium Look)
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 10px;
-        height: 3em;
-        background-color: #0d6efd;
-        color: white;
-        font-weight: bold;
-    }
-    .upload-text {
-        text-align: center;
-        color: #6c757d;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="BLC Mega Agenda Tool", page_icon="🚀", layout="wide")
 
-# ================= Config สี =================
-HIGHLIGHT_STUDENT = (1, 1, 0)
-HIGHLIGHT_TIME = (0.8, 1, 0.8)
-HIGHLIGHT_ROOM = (0.7, 0.9, 1)
-STRIKE_COLOR = (1, 0, 0)
-
-# ================= Logic การประมวลผล =================
-
-def parse_agenda_blocks(text):
-    blocks = []
-    lines = text.split('\n')
-    current_block = []
-    time_pattern = re.compile(r'^\d{1,2}:\d{2}\s+(AM|PM)\s*-\s*\d{1,2}:\d{2}\s+(AM|PM)')
-    for line in lines:
-        line = line.strip()
-        if not line: continue
-        if time_pattern.match(line):
-            if current_block: blocks.append('\n'.join(current_block))
-            current_block = [line]
-        else:
-            if any(word in line for word in ['AGENDA', 'British Learning Centre', 'Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']): continue
-            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', line): continue
-            if current_block: current_block.append(line)
-    if current_block: blocks.append('\n'.join(current_block))
-    return blocks
+# ================= Logic ดึงข้อมูลนักเรียน =================
 
 def parse_students_robust(text):
     students = []
@@ -65,6 +24,7 @@ def parse_students_robust(text):
     for kw in STOP_KEYWORDS:
         idx = text.find(kw)
         if idx != -1: text = text[:idx]
+    
     segments = text.replace('\n', ' ').split(';')
     for segment in segments:
         segment = segment.strip()
@@ -72,153 +32,187 @@ def parse_students_robust(text):
         is_absent = 'Absent' in segment or 'Notice Given' in segment
         clean_seg = re.sub(r'\s*\([^)]*\)', '', segment).strip()
         if not clean_seg: continue
-        nickname = clean_seg.split()[0] if clean_seg.split() else None
-        full_name = clean_seg
-        if ' - ' in clean_seg:
-            parts = clean_seg.split(' - ', 1)
-            nickname = parts[0].strip()
-            full_name = parts[1].strip() if len(parts) > 1 else None
+        parts = clean_seg.split(' - ')
+        nickname = parts[0].strip().split(' ')[0]
         if nickname and len(nickname) > 1 and not nickname.isdigit():
-            students.append({'nickname': nickname, 'full_name': full_name, 'original': segment, 'is_absent': is_absent})
+            students.append({'nickname': nickname, 'original': segment, 'is_absent': is_absent})
     return students
 
-def extract_students_greedy(block_text):
-    lines = block_text.split('\n')
-    if not lines: return {'time': None, 'students': []}
-    time_str = lines[0]
-    all_students = []
-    ROOM_INDICATORS = ['Cambridge Classroom', 'Oxford Classroom', 'Teacher Classroom', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', 'Room']
-    buffer_text = ""
-    for line in lines[1:]:
-        line = line.strip()
-        if not line: continue
-        is_room = any(indicator in line for indicator in ROOM_INDICATORS)
-        if is_room:
-            if buffer_text:
-                all_students.extend(parse_students_robust(buffer_text))
-                buffer_text = ""
-        else:
-            if not line.startswith(('KS', 'UKS', 'LKS', 'Year', 'EE', 'Early', 'Reception', 'Phonics')):
-                buffer_text += " " + line
-    if buffer_text: all_students.extend(parse_students_robust(buffer_text))
-    return {'time': time_str, 'students': all_students}
+# ================= ฟังก์ชันสร้างแบบฟอร์มแบบรวมไฟล์ (Multi-page) =================
 
-def mark_exact_word(page, text, color, is_absent=False):
-    if not text: return 0
-    count = 0
-    words = page.get_text("words")
-    target_clean = re.sub(r'[^\w]', '', text).lower()
-    for w in words:
-        word_text = w[4]
-        word_clean = re.sub(r'[^\w]', '', word_text).lower()
-        if word_clean == target_clean:
-            rect = fitz.Rect(w[0], w[1], w[2], w[3])
-            annot = page.add_strikeout_annot(rect) if is_absent else page.add_highlight_annot(rect)
-            annot.set_colors(stroke=color)
-            annot.update()
-            count += 1
-    return count
+def draw_single_eval_page(can, data):
+    """วาดหน้าใบประเมิน 1 หน้า"""
+    width, height = A4
+    can.setFont("Helvetica-Bold", 16)
+    can.drawString(50, height - 50, "Student Evaluation Form - English")
+    can.setFont("Helvetica", 11)
+    can.drawString(50, height - 80, f"Date:  {data.get('Date', '')}")
+    can.drawString(50, height - 100, f"WALT:  {data.get('WALT', '')}")
+    can.drawString(50, height - 120, f"Teacher Name:  {data.get('Teacher', '')}")
+    can.drawString(50, height - 140, f"Classroom:  {data.get('Classroom', '')}")
+    can.drawString(50, height - 160, f"Time:  {data.get('Time', '')}")
 
-def find_and_mark_generic(page, text, color, is_absent=False):
-    if not text: return 0
-    count = 0
-    instances = page.search_for(text)
-    for inst in instances:
-        annot = page.add_strikeout_annot(inst) if is_absent else page.add_highlight_annot(inst)
-        annot.set_colors(stroke=color)
-        annot.update()
-        count += 1
-    return count
+    table_top, row_h = height - 200, 25
+    cols = [200, 80, 80, 130]
+    
+    # --- เช็คว่าเป็นวิชา Math หรือไม่ ---
+    is_math = data.get('is_math', False)
+    spelling_header = "99 Club" if is_math else "Spelling"
+    headers = ["Name", "Effort", spelling_header, "Teacher Assessment"]
+    
+    x = 50
+    can.setFont("Helvetica-Bold", 10)
+    for i, h in enumerate(headers):
+        can.rect(x, table_top, cols[i], row_h)
+        can.drawString(x + 5, table_top + 7, h)
+        x += cols[i]
 
-def mark_structure(page):
-    count = 0
-    CLASSROOM_TARGETS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "EYFS Classroom", "1-to-1 Room", "2-to-1 Room", "Ground Floor", "1to-1 Room"]
-    for room in CLASSROOM_TARGETS: count += find_and_mark_generic(page, room, HIGHLIGHT_ROOM)
-    return count
+    can.setFont("Helvetica", 10)
+    student_list = [s['nickname'] for s in data.get('Students', []) if not s['is_absent']]
+    y_current = table_top
+    for row in range(10):
+        y_current = table_top - (row + 1) * row_h
+        x = 50
+        name = student_list[row] if row < len(student_list) else ""
+        for i, w in enumerate(cols):
+            can.rect(x, y_current, w, row_h)
+            if i == 0: can.drawString(x + 5, y_current + 7, name)
+            elif i == 1: can.drawCentredString(x + w/2, y_current + 7, "/ 5")
+            elif i == 3: can.drawCentredString(x + w/2, y_current + 7, "R    Y    G")
+            x += w
+    
+    footer_y = y_current - 40
+    for item in ["Phonics:", "Grammar:", "Speaking and Listening:", "RWI/Fresh Start Book:", "Main Learning:"]:
+        can.drawString(50, footer_y, item)
+        can.line(50, footer_y - 2, 540, footer_y - 2)
+        footer_y -= 30
+    can.showPage()
 
-def process_single_pdf_bytes(file_bytes):
+def create_combined_evals_pdf(all_blocks):
+    """สร้าง PDF รวมทุกใบประเมินไว้ในไฟล์เดียว"""
+    packet = io.BytesIO()
+    can = canvas.Canvas(packet, pagesize=A4)
+    for block_data in all_blocks:
+        draw_single_eval_page(can, block_data)
+    can.save()
+    packet.seek(0)
+    return packet
+
+# ================= ฟังก์ชันประมวลผล PDF =================
+
+def process_everything(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
+    all_blocks_data = []
+    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "EYFS Classroom", "1-to-1 Room", "2-to-1 Room", "Ground Floor", "1to-1 Room"]
+
     for page in doc:
         full_text = page.get_text()
-        blocks = parse_agenda_blocks(full_text)
-        mark_structure(page)
-        for block in blocks:
-            data = extract_students_greedy(block)
-            if data['time']:
-                time_match = re.match(r'^\d{1,2}:\d{2}\s+(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s+(?:AM|PM)', data['time'])
-                if time_match: find_and_mark_generic(page, time_match.group(0), HIGHLIGHT_TIME)
-            for student in data['students']:
-                if student['is_absent']:
-                    c = find_and_mark_generic(page, student['original'], STRIKE_COLOR, is_absent=True)
-                    if c == 0:
-                        if ' - ' in student['original']:
-                            for part in student['original'].split(' - '):
-                                if part.strip(): find_and_mark_generic(page, part.strip(), STRIKE_COLOR, is_absent=True)
-                        if ' ' not in student['nickname']:
-                            mark_exact_word(page, student['nickname'], STRIKE_COLOR, is_absent=True)
-                        else:
-                            find_and_mark_generic(page, student['nickname'], STRIKE_COLOR, is_absent=True)
-                        if student['full_name']: find_and_mark_generic(page, student['full_name'], STRIKE_COLOR, is_absent=True)
-                        for p in re.findall(r'\([^)]+\)', student['original']): find_and_mark_generic(page, p, STRIKE_COLOR, is_absent=True)
-                else:
-                    if ' ' not in student['nickname']:
-                        mark_exact_word(page, student['nickname'], HIGHLIGHT_STUDENT)
-                    else:
-                        find_and_mark_generic(page, student['nickname'], HIGHLIGHT_STUDENT)
-    
-    output_buffer = io.BytesIO()
-    doc.save(output_buffer)
-    doc.close()
-    output_buffer.seek(0)
-    return output_buffer
+        lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+        
+        teacher, agenda_date = "Unknown", "Unknown"
+        for i, line in enumerate(lines):
+            if re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),', line):
+                agenda_date = line
+                if i > 0: teacher = lines[i-1]
+                break
 
-# ================= Streamlit UI =================
+        current_block = None
+        time_pattern = re.compile(r'^\d{1,2}:\d{2}\s+(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s+(?:AM|PM)')
+        
+        page_blocks = []
+        for line in lines:
+            if time_pattern.match(line):
+                if current_block: page_blocks.append(current_block)
+                current_block = {"Date": agenda_date, "Teacher": teacher, "Time": line, "Classroom": "Unknown", "WALT": "Unknown", "Students": [], "raw": [], "is_math": False}
+                for inst in page.search_for(line):
+                    annot = page.add_highlight_annot(inst)
+                    if annot: 
+                        annot.set_colors(stroke=HIGHLIGHT_TIME)
+                        annot.update()
+            elif current_block:
+                current_block["raw"].append(line)
+        if current_block: page_blocks.append(current_block)
+
+        for fb in page_blocks:
+            block_text = "\n".join(fb["raw"])
+            fb["Students"] = parse_students_robust(block_text)
+            
+            # --- เช็ควิชา Math ---
+            if "math" in block_text.lower():
+                fb["is_math"] = True
+
+            for student in fb["Students"]:
+                # ไฮไลท์นักเรียน
+                for inst in page.search_for(student['nickname']):
+                    if student['is_absent']:
+                        annot = page.add_strikeout_annot(inst)
+                        if annot: 
+                            annot.set_colors(stroke=STRIKE_COLOR)
+                            annot.update()
+                    else:
+                        annot = page.add_highlight_annot(inst)
+                        if annot: 
+                            annot.set_colors(stroke=HIGHLIGHT_STUDENT)
+                            annot.update()
+
+            for line in fb["raw"]:
+                room = next((r for r in ROOM_INDICATORS if r in line), None)
+                if room:
+                    fb["Classroom"] = room
+                    if " - " in line: 
+                        walt_text = line.split(" - ", 1)[1].strip()
+                        fb["WALT"] = walt_text
+                        if "math" in walt_text.lower():
+                            fb["is_math"] = True
+                    
+                    for inst in page.search_for(room):
+                        annot = page.add_highlight_annot(inst)
+                        if annot: 
+                            annot.set_colors(stroke=HIGHLIGHT_ROOM)
+                            annot.update()
+            all_blocks_data.append(fb)
+    
+    out_pdf = io.BytesIO()
+    doc.save(out_pdf)
+    doc.close()
+    out_pdf.seek(0)
+    return out_pdf, all_blocks_data
+
+# ================= UI =================
 
 def main():
-    st.markdown("<h2 style='text-align: center; color: #0d6efd;'>📋 BLC Agenda Checker</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #6c757d;'>Version 7.2 (Isabella Fix)</p>", unsafe_allow_html=True)
-    st.divider()
+    st.title("🚀 BLC Mega Agenda Tool")
+    st.write("รองรับการเปลี่ยน Spelling เป็น 99 Club สำหรับวิชา Math อัตโนมัติ")
 
-    uploaded_files = st.file_uploader(
-        "Upload PDF Agendas", 
-        type="pdf", 
-        accept_multiple_files=True,
-        help="คุณสามารถเลือกไฟล์ PDF ได้ครั้งละหลายไฟล์"
-    )
+    uploaded_files = st.file_uploader("Upload Agenda PDF", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
-        st.info(f"เลือกไฟล์ทั้งหมด {len(uploaded_files)} ไฟล์")
-        
-        if st.button("🚀 Process and Download"):
-            zip_buffer = io.BytesIO()
-            
-            with st.spinner('กำลังประมวลผลไฟล์... กรุณารอสักครู่'):
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    for uploaded_file in uploaded_files:
-                        file_bytes = uploaded_file.read()
-                        processed_io = process_single_pdf_bytes(file_bytes)
-                        zip_file.writestr(f"Checked_{uploaded_file.name}", processed_io.getvalue())
-                
-                zip_buffer.seek(0)
-                
-            st.success("ประมวลผลเสร็จสิ้น!")
-            
-            st.download_button(
-                label="📥 Download Checked_Agendas.zip",
-                data=zip_buffer,
-                file_name="Checked_Agendas.zip",
-                mime="application/zip"
-            )
-            st.balloons()
+        zip_buffer = io.BytesIO()
+        all_recs_summary = []
+        all_blocks_for_combined = []
 
-    else:
-        st.markdown("""
-            <div style="background-color: #f1f7ff; padding: 40px; border-radius: 10px; border: 2px dashed #0d6efd; text-align: center;">
-                <h1 style="font-size: 3rem; margin-bottom: 10px;">📂</h1>
-                <p style="font-weight: bold; color: #0d6efd;">ลากไฟล์มาวาง หรือ คลิกเพื่ออัปโหลด</p>
-                <p style="font-size: 0.8rem; color: #6c757d;">รองรับไฟล์ PDF หลายไฟล์พร้อมกัน</p>
-            </div>
-        """, unsafe_allow_html=True)
+        with st.spinner('กำลังประมวลผล...'):
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for uploaded_file in uploaded_files:
+                    try:
+                        checked_pdf, block_data = process_everything(uploaded_file.read())
+                        zip_file.writestr(f"Checked_{uploaded_file.name}", checked_pdf.getvalue())
+                        all_blocks_for_combined.extend(block_data)
+                        all_recs_summary.extend(block_data)
+                    except Exception as e:
+                        st.error(f"เกิดข้อผิดพลาดกับไฟล์ {uploaded_file.name}: {e}")
+
+                if all_blocks_for_combined:
+                    combined_evals_pdf = create_combined_evals_pdf(all_blocks_for_combined)
+                    zip_file.writestr("All_Evaluations.pdf", combined_evals_pdf.getvalue())
+
+            zip_buffer.seek(0)
+            if all_recs_summary:
+                st.success(f"ประมวลผลสำเร็จ! รวมทั้งหมด {len(all_recs_summary)} คาบเรียน")
+                df = pd.DataFrame(all_recs_summary).drop(columns=['raw'])
+                st.dataframe(df)
+                st.download_button("📥 Download All Files (ZIP)", zip_buffer, "BLC_Pack.zip", "application/zip")
+                st.balloons()
 
 if __name__ == '__main__':
     main()
