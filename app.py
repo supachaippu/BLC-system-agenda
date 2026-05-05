@@ -62,12 +62,18 @@ def draw_eval_block(can, data, start_y):
     can.drawString(50, y, f"Student Evaluation Form - {title_suffix}")
     y -= 25
     
+    # --- ตรวจสอบเงื่อนไข Private เพื่อเติม 1 to 1 ---
+    walt_text = data.get('WALT', '')
+    classroom_text = data.get('Classroom', '')
+    if "private" in walt_text.lower():
+        classroom_text = f"1 to 1 {classroom_text}"
+
     can.setFont("Helvetica", 10)
     can.drawString(50, y, f"Date: {data.get('Date', '')}  |  Time: {data.get('Time', '')}")
     y -= 15
-    can.drawString(50, y, f"Teacher: {data.get('Teacher', '')}  |  Room: {data.get('Classroom', '')}")
+    can.drawString(50, y, f"Teacher: {data.get('Teacher', '')}  |  Room: {classroom_text}")
     y -= 15
-    can.drawString(50, y, f"WALT: {data.get('WALT', '')}")
+    can.drawString(50, y, f"WALT: {walt_text}")
     y -= 25
 
     # --- ตารางนักเรียน ---
