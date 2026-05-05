@@ -6,6 +6,7 @@ import zipfile
 import pandas as pd
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
+from collections import defaultdict
 
 # ================= Config สี (ปรับให้สว่างพิเศษเพื่อการปริ้นขาวดำ) =================
 HIGHLIGHT_STUDENT = (1.0, 1.0, 0.85)  # เหลืองจางมาก
@@ -38,91 +39,99 @@ def parse_students_robust(text):
             students.append({'nickname': nickname, 'original': segment, 'is_absent': is_absent})
     return students
 
-# ================= ฟังก์ชันสร้างแบบฟอร์มแบบรวมไฟล์ (Multi-page) =================
+# ================= ฟังก์ชันสร้างแบบฟอร์มแบบใหม่ (ประหยัดพื้นที่) =================
 
-def draw_single_eval_page(can, data):
-    """วาดหน้าใบประเมิน 1 หน้า"""
+def draw_eval_block(can, data, start_y):
+    """วาดหนึ่งคลาส (Block) และคืนค่าตำแหน่ง Y สุดท้ายที่วาดเสร็จ"""
     width, height = A4
+    y = start_y
     
-    # --- เช็คว่าเป็นวิชา Math หรือไม่ ---
+    # เช็คพื้นที่คงเหลือ (ถ้าเหลือน้อยกว่า 200 units ให้ขึ้นหน้าใหม่)
+    estimated_height = 120 + (len(data.get('Students', [])) * 25)
+    if y - estimated_height < 50:
+        can.showPage()
+        y = height - 50
+        draw_legend_box(can, height)
+
+    # --- หัวข้อคลาส ---
     is_math = data.get('is_math', False)
     title_suffix = "Math" if is_math else "English"
     spelling_header = "99 Club" if is_math else "Spelling"
     
-    # วาดหัวข้อหลัก
-    can.setFont("Helvetica-Bold", 16)
-    can.drawString(50, height - 50, f"Student Evaluation Form - {title_suffix}")
+    can.setFont("Helvetica-Bold", 14)
+    can.drawString(50, y, f"Student Evaluation Form - {title_suffix}")
+    y -= 25
     
-    # --- กล่องเกณฑ์คะแนนมุมขวาบน (Legend Box) ---
+    can.setFont("Helvetica", 10)
+    can.drawString(50, y, f"Date: {data.get('Date', '')}  |  Time: {data.get('Time', '')}")
+    y -= 15
+    can.drawString(50, y, f"Teacher: {data.get('Teacher', '')}  |  Room: {data.get('Classroom', '')}")
+    y -= 15
+    can.drawString(50, y, f"WALT: {data.get('WALT', '')}")
+    y -= 25
+
+    # --- ตารางนักเรียน ---
+    headers = ["Name", "Effort", spelling_header, "Teacher Assessment"]
+    cols = [200, 80, 80, 130]
+    row_h = 25
+    
+    can.setFont("Helvetica-Bold", 9)
+    x = 50
+    for i, h in enumerate(headers):
+        can.rect(x, y - row_h, cols[i], row_h)
+        can.drawString(x + 5, y - row_h + 7, h)
+        x += cols[i]
+    y -= row_h
+
+    can.setFont("Helvetica", 9)
+    student_list = [s for s in data.get('Students', []) if not s['is_absent']]
+    
+    if not student_list:
+        x = 50
+        for w in cols:
+            can.rect(x, y - row_h, w, row_h)
+            x += w
+        can.drawString(55, y - row_h + 7, "(No students present)")
+        y -= row_h
+    else:
+        for s in student_list:
+            x = 50
+            for i, w in enumerate(cols):
+                can.rect(x, y - row_h, w, row_h)
+                if i == 0: can.drawString(x + 5, y - row_h + 7, s['nickname'])
+                elif i == 1: can.drawCentredString(x + w/2, y - row_h + 7, "/ 5")
+                elif i == 3: can.drawCentredString(x + w/2, y - row_h + 7, "R    Y    G")
+                x += w
+            y -= row_h
+
+    return y - 30
+
+def draw_legend_box(can, height):
     can.setFont("Helvetica", 8)
-    box_x, box_y, box_w, box_h = 440, height - 100, 110, 65
+    box_x, box_y, box_w, box_h = 440, height - 85, 110, 60
     can.rect(box_x, box_y, box_w, box_h)
-    
-    legend_items = [
-        "1 - Unsatisfactory",
-        "2 - Could do better",
-        "3 - Satisfactory",
-        "4 - Gold",
-        "5 - Outstanding"
-    ]
-    
-    text_y = box_y + box_h - 12
+    legend_items = ["1 - Unsatisfactory", "2 - Could do better", "3 - Satisfactory", "4 - Gold", "5 - Outstanding"]
+    text_y = box_y + box_h - 10
     for item in legend_items:
         can.drawString(box_x + 5, text_y, item)
-        text_y -= 11
-
-    can.setFont("Helvetica", 11)
-    can.drawString(50, height - 80, f"Date:  {data.get('Date', '')}")
-    can.drawString(50, height - 100, f"WALT:  {data.get('WALT', '')}")
-    can.drawString(50, height - 120, f"Teacher Name:  {data.get('Teacher', '')}")
-    can.drawString(50, height - 140, f"Classroom:  {data.get('Classroom', '')}")
-    can.drawString(50, height - 160, f"Time:  {data.get('Time', '')}")
-
-    table_top, row_h = height - 200, 25
-    cols = [200, 80, 80, 130]
-    headers = ["Name", "Effort", spelling_header, "Teacher Assessment"]
-    
-    x = 50
-    can.setFont("Helvetica-Bold", 10)
-    for i, h in enumerate(headers):
-        can.rect(x, table_top, cols[i], row_h)
-        can.drawString(x + 5, table_top + 7, h)
-        x += cols[i]
-
-    can.setFont("Helvetica", 10)
-    student_list = [s['nickname'] for s in data.get('Students', []) if not s['is_absent']]
-    y_current = table_top
-    for row in range(10):
-        y_current = table_top - (row + 1) * row_h
-        x = 50
-        name = student_list[row] if row < len(student_list) else ""
-        for i, w in enumerate(cols):
-            can.rect(x, y_current, w, row_h)
-            if i == 0: can.drawString(x + 5, y_current + 7, name)
-            elif i == 1: can.drawCentredString(x + w/2, y_current + 7, "/ 5")
-            elif i == 3: can.drawCentredString(x + w/2, y_current + 7, "R    Y    G")
-            x += w
-    
-    # --- ส่วนท้าย (Footer) ปรับตามวิชา ---
-    footer_y = y_current - 40
-    if is_math:
-        footer_items = ["Arithmetic:", "Reasoning:", "True/False:", "Small Steps:"]
-    else:
-        footer_items = ["Phonics:", "Grammar:", "Speaking and Listening:", "RWI/Fresh Start Book:", "Main Learning:"]
-    
-    for item in footer_items:
-        can.drawString(50, footer_y, item)
-        can.line(50, footer_y - 2, 540, footer_y - 2)
-        footer_y -= 30
-        
-    can.showPage()
+        text_y -= 10
 
 def create_combined_evals_pdf(all_blocks):
-    """สร้าง PDF รวมทุกใบประเมินไว้ในไฟล์เดียว"""
     packet = io.BytesIO()
     can = canvas.Canvas(packet, pagesize=A4)
-    for block_data in all_blocks:
-        draw_single_eval_page(can, block_data)
+    width, height = A4
+    
+    teacher_groups = defaultdict(list)
+    for b in all_blocks:
+        teacher_groups[b['Teacher']].append(b)
+    
+    for teacher, blocks in teacher_groups.items():
+        y_cursor = height - 50
+        draw_legend_box(can, height)
+        for block_data in blocks:
+            y_cursor = draw_eval_block(can, block_data, y_cursor)
+        can.showPage()
+        
     can.save()
     packet.seek(0)
     return packet
@@ -166,12 +175,10 @@ def process_everything(file_bytes):
             block_text = "\n".join(fb["raw"])
             fb["Students"] = parse_students_robust(block_text)
             
-            # --- เช็ควิชา Math ---
             is_math_block = "math" in block_text.lower()
             fb["is_math"] = is_math_block
 
             for student in fb["Students"]:
-                # ไฮไลท์นักเรียน
                 for inst in page.search_for(student['nickname']):
                     if student['is_absent']:
                         annot = page.add_strikeout_annot(inst)
@@ -210,7 +217,7 @@ def process_everything(file_bytes):
 
 def main():
     st.title("🚀 BLC Mega Agenda Tool")
-    st.write("อัปเดต: เพิ่มกล่องเกณฑ์คะแนน (Legend) ไว้ที่มุมขวาบน")
+    st.write("เวอร์ชันประหยัดพื้นที่ + จัดกลุ่มตามคุณครู")
 
     uploaded_files = st.file_uploader("Upload Agenda PDF", type="pdf", accept_multiple_files=True)
 
@@ -224,6 +231,7 @@ def main():
                 for uploaded_file in uploaded_files:
                     try:
                         checked_pdf, block_data = process_everything(uploaded_file.read())
+                        # นำไฟล์ Checked Agenda (ไฮไลท์) กลับมาใส่ใน ZIP
                         zip_file.writestr(f"Checked_{uploaded_file.name}", checked_pdf.getvalue())
                         all_blocks_for_combined.extend(block_data)
                         all_recs_summary.extend(block_data)
