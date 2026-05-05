@@ -21,7 +21,7 @@ st.set_page_config(page_title="BLC Mega Agenda Tool", page_icon="🚀", layout="
 def parse_students_robust(text):
     students = []
     text = re.sub(r'(?:Group|Private)\s+Lesson\s*-\s*', '', text, flags=re.IGNORECASE)
-    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Teacher Classroom', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
+    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Teacher Classroom', 'Teacher Room', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
     for kw in STOP_KEYWORDS:
         idx = text.find(kw)
         if idx != -1: text = text[:idx]
@@ -46,7 +46,7 @@ def draw_eval_block(can, data, start_y):
     width, height = A4
     y = start_y
     
-    # เช็คพื้นที่คงเหลือ (ถ้าเหลือน้อยกว่า 200 units ให้ขึ้นหน้าใหม่)
+    # เช็คพื้นที่คงเหลือ
     estimated_height = 120 + (len(data.get('Students', [])) * 25)
     if y - estimated_height < 50:
         can.showPage()
@@ -62,18 +62,12 @@ def draw_eval_block(can, data, start_y):
     can.drawString(50, y, f"Student Evaluation Form - {title_suffix}")
     y -= 25
     
-    # --- ตรวจสอบเงื่อนไข Private เพื่อเติม 1 to 1 ---
-    walt_text = data.get('WALT', '')
-    classroom_text = data.get('Classroom', '')
-    if "private" in walt_text.lower():
-        classroom_text = f"1 to 1 {classroom_text}"
-
     can.setFont("Helvetica", 10)
     can.drawString(50, y, f"Date: {data.get('Date', '')}  |  Time: {data.get('Time', '')}")
     y -= 15
-    can.drawString(50, y, f"Teacher: {data.get('Teacher', '')}  |  Room: {classroom_text}")
+    can.drawString(50, y, f"Teacher: {data.get('Teacher', '')}  |  Room: {data.get('Classroom', '')}")
     y -= 15
-    can.drawString(50, y, f"WALT: {walt_text}")
+    can.drawString(50, y, f"WALT: {data.get('WALT', '')}")
     y -= 25
 
     # --- ตารางนักเรียน ---
@@ -147,7 +141,7 @@ def create_combined_evals_pdf(all_blocks):
 def process_everything(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     all_blocks_data = []
-    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "EYFS Classroom", "1-to-1 Room", "2-to-1 Room", "Ground Floor", "1to-1 Room"]
+    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room"]
 
     for page in doc:
         full_text = page.get_text()
@@ -181,9 +175,40 @@ def process_everything(file_bytes):
             block_text = "\n".join(fb["raw"])
             fb["Students"] = parse_students_robust(block_text)
             
-            is_math_block = "math" in block_text.lower()
+            # --- ระบบใหม่: ตรวจจับประเภทคลาสและห้องเรียน ---
+            lesson_type = ""
+            text_lower = block_text.lower()
+            
+            if any(kw in text_lower for kw in ["one to one", "1 to 1", "1-to-1", "1to-1", "private"]):
+                lesson_type = "1 to 1 "
+            elif any(kw in text_lower for kw in ["two to one", "2 to 1", "2-to-1"]):
+                lesson_type = "2 to 1 "
+                
+            detected_room = "Unknown Room"
+            for r in ROOM_INDICATORS:
+                if r.lower() in text_lower:
+                    detected_room = r
+                    break
+            
+            if "1-to-1" in detected_room or "2-to-1" in detected_room:
+                fb["Classroom"] = detected_room
+            else:
+                fb["Classroom"] = f"{lesson_type}{detected_room}".strip()
+
+            # --- เช็ควิชา Math ---
+            is_math_block = "math" in text_lower
             fb["is_math"] = is_math_block
 
+            # --- ไฮไลท์สีใน PDF (กู้คืนกลับมา) ---
+            # ไฮไลท์ห้องเรียน
+            if detected_room != "Unknown Room":
+                for inst in page.search_for(detected_room):
+                    annot = page.add_highlight_annot(inst)
+                    if annot:
+                        annot.set_colors(stroke=HIGHLIGHT_ROOM)
+                        annot.update()
+
+            # ไฮไลท์นักเรียน
             for student in fb["Students"]:
                 for inst in page.search_for(student['nickname']):
                     if student['is_absent']:
@@ -197,20 +222,14 @@ def process_everything(file_bytes):
                             annot.set_colors(stroke=HIGHLIGHT_STUDENT)
                             annot.update()
 
+            # ดึงข้อมูล WALT
             for line in fb["raw"]:
-                room = next((r for r in ROOM_INDICATORS if r in line), None)
-                if room:
-                    fb["Classroom"] = room
-                    if " - " in line: 
-                        walt_text = line.split(" - ", 1)[1].strip()
-                        fb["WALT"] = walt_text
-                        if "math" in walt_text.lower():
-                            fb["is_math"] = True
-                    for inst in page.search_for(room):
-                        annot = page.add_highlight_annot(inst)
-                        if annot: 
-                            annot.set_colors(stroke=HIGHLIGHT_ROOM)
-                            annot.update()
+                if " - " in line: 
+                    walt_text = line.split(" - ", 1)[1].strip()
+                    fb["WALT"] = walt_text
+                    if "math" in walt_text.lower():
+                        fb["is_math"] = True
+            
             all_blocks_data.append(fb)
     
     out_pdf = io.BytesIO()
@@ -223,7 +242,7 @@ def process_everything(file_bytes):
 
 def main():
     st.title("🚀 BLC Mega Agenda Tool")
-    st.write("เวอร์ชันประหยัดพื้นที่ + จัดกลุ่มตามคุณครู")
+    st.write("เวอร์ชันอัปเกรด: ตรวจจับคลาส 1to1 / 2to1 และห้องเรียนแบบละเอียด")
 
     uploaded_files = st.file_uploader("Upload Agenda PDF", type="pdf", accept_multiple_files=True)
 
@@ -237,7 +256,6 @@ def main():
                 for uploaded_file in uploaded_files:
                     try:
                         checked_pdf, block_data = process_everything(uploaded_file.read())
-                        # นำไฟล์ Checked Agenda (ไฮไลท์) กลับมาใส่ใน ZIP
                         zip_file.writestr(f"Checked_{uploaded_file.name}", checked_pdf.getvalue())
                         all_blocks_for_combined.extend(block_data)
                         all_recs_summary.extend(block_data)
