@@ -141,7 +141,7 @@ def create_combined_evals_pdf(all_blocks):
 def process_everything(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     all_blocks_data = []
-    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room"]
+    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room", "Online Lesson"]
 
     for page in doc:
         full_text = page.get_text()
