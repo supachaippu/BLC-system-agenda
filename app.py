@@ -190,7 +190,11 @@ def process_everything(file_bytes):
                     detected_room = r
                     break
             
-            if "1-to-1" in detected_room or "2-to-1" in detected_room:
+            # รวมร่าง (ยกเว้น Cambridge และ EYFS ที่ห้ามใส่ 1to1/2to1)
+            is_restricted = any(name in detected_room for name in ["Cambridge", "EYFS"])
+            already_has_info = "1-to-1" in detected_room or "2-to-1" in detected_room
+            
+            if is_restricted or already_has_info:
                 fb["Classroom"] = detected_room
             else:
                 fb["Classroom"] = f"{lesson_type}{detected_room}".strip()
