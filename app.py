@@ -21,7 +21,7 @@ st.set_page_config(page_title="BLC Mega Agenda Tool", page_icon="🚀", layout="
 def parse_students_robust(text):
     students = []
     text = re.sub(r'(?:Group|Private)\s+Lesson\s*-\s*', '', text, flags=re.IGNORECASE)
-    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Teacher Classroom', 'Teacher Room', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
+    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Canterbury Classroom', 'Teacher Classroom', 'Teacher Room', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
     for kw in STOP_KEYWORDS:
         idx = text.find(kw)
         if idx != -1: text = text[:idx]
@@ -141,7 +141,7 @@ def create_combined_evals_pdf(all_blocks):
 def process_everything(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     all_blocks_data = []
-    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room", "Online Lesson"]
+    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Canterbury Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room", "Online Lesson"]
 
     for page in doc:
         full_text = page.get_text()
