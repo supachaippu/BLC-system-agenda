@@ -20,8 +20,8 @@ st.set_page_config(page_title="BLC Mega Agenda Tool", page_icon="🚀", layout="
 
 def parse_students_robust(text):
     students = []
-    text = re.sub(r'(?:Group|Private)\s+Lesson\s*-\s*', '', text, flags=re.IGNORECASE)
-    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Canterbury Classroom', 'Teacher Classroom', 'Teacher Room', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
+    text = re.sub(r'(?:Group\s+|Private\s+)?Lesson\s*-\s*', '', text, flags=re.IGNORECASE)
+    STOP_KEYWORDS = ['Cambridge Classroom', 'Oxford Classroom', 'Canterbury Classroom', 'Warwick Classroom', 'Teacher Classroom', 'Teacher Room', 'EYFS Classroom', '1-to-1 Room', '2-to-1 Room', 'Ground Floor', '1to-1 Room', '- Online']
     for kw in STOP_KEYWORDS:
         idx = text.find(kw)
         if idx != -1: text = text[:idx]
@@ -141,7 +141,7 @@ def create_combined_evals_pdf(all_blocks):
 def process_everything(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     all_blocks_data = []
-    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Canterbury Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room", "Online Lesson"]
+    ROOM_INDICATORS = ["Cambridge Classroom", "Oxford Classroom", "Canterbury Classroom", "Warwick Classroom", "Teacher Classroom", "Teacher Room", "EYFS Classroom", "Ground Floor", "1-to-1 Room", "2-to-1 Room", "1to-1 Room", "Online Lesson"]
 
     for page in doc:
         full_text = page.get_text()
@@ -179,9 +179,9 @@ def process_everything(file_bytes):
             lesson_type = ""
             text_lower = block_text.lower()
             
-            if any(kw in text_lower for kw in ["one to one", "1 to 1", "1-to-1", "1to-1", "private"]):
+            if any(kw in text_lower for kw in ["one to one", "1 to 1", "1-to-1", "1to-1", "1-1", "private"]):
                 lesson_type = "1 to 1 "
-            elif any(kw in text_lower for kw in ["two to one", "2 to 1", "2-to-1"]):
+            elif any(kw in text_lower for kw in ["two to one", "2 to 1", "2-to-1", "2-1"]):
                 lesson_type = "2 to 1 "
                 
             detected_room = "Unknown Room"
@@ -226,13 +226,15 @@ def process_everything(file_bytes):
                             annot.set_colors(stroke=HIGHLIGHT_STUDENT)
                             annot.update()
 
-            # ดึงข้อมูล WALT
+            # ดึงข้อมูล WALT (ดึงเฉพาะจากบรรทัดที่มีชื่อห้องเรียนเพื่อความแม่นยำ)
             for line in fb["raw"]:
-                if " - " in line: 
+                if any(r in line for r in ROOM_INDICATORS) and " - " in line:
                     walt_text = line.split(" - ", 1)[1].strip()
                     fb["WALT"] = walt_text
+                    # เช็ควิชา Math จาก WALT อีกรอบเพื่อความชัวร์
                     if "math" in walt_text.lower():
                         fb["is_math"] = True
+                    break # เจอแล้วหยุดเลย
             
             all_blocks_data.append(fb)
     
